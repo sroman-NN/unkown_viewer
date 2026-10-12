@@ -2,9 +2,9 @@
 // configuraciones adicionales solo un programa similar a un bloc de notas pero ligero y sin dependencias 
 // en este codigo solo se utilizan funciones nativas de WIN32 y WINAPI y c++ 17
 // -----------------------------------------------------------------------------------
-//  version de codigo : 0.3
-//  ultima compilacion: 11/10/2026 21:49 GMT-4
-//  version de programa: 1.0.0
+//  version de codigo : 0.5
+//  ultima compilacion: 11/10/2026 23:11 GMT-4
+//  version de programa: 1.0.1
 
 
 

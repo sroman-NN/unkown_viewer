@@ -19,7 +19,7 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "sebastian G.romanelli"
             VALUE "FileDescription",  "Unkown Viewer"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      "1.0.0.1"
             VALUE "InternalName",     "unkown_viewer"
             VALUE "OriginalFilename", "unkown_viewer.exe"
             VALUE "ProductName",      "Unkown Viewer"
