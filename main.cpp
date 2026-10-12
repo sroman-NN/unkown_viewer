@@ -1,10 +1,27 @@
-// programa monolitico , unkown viewer , editor de texto simple con soporte UTF-8 sin resaltado de syntax ni  
-// configuraciones adicionales solo un programa similar a un bloc de notas pero ligero y sin dependencias 
-// en este codigo solo se utilizan funciones nativas de WIN32 y WINAPI y c++ 17
+//  unkown_viewer a minimalist plain text editor for educative propourses
+//   Copyright (C) 2026  sebastian .g romanelli
+
+//    This program is free software: you can redistribute it and/or modify
+//    it under the terms of the GNU General Public License as published by
+//    the Free Software Foundation, either version 3 of the License, or
+//    (at your option) any later version.
+//
+//    This program is distributed in the hope that it will be useful,
+//   but WITHOUT ANY WARRANTY; without even the implied warranty of
+//    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//    GNU General Public License for more details.
+
+//    You should have received a copy of the GNU General Public License
+//    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+// Monolithic program, "unknown viewer": a simple text editor with UTF-8 support,
+// featuring no syntax highlighting or additional configurations—essentially a
+// lightweight, dependency-free program similar to Notepad.
+// This code uses only native WIN32/WINAPI functions and C++17.
 // -----------------------------------------------------------------------------------
-//  version de codigo : 0.5
-//  ultima compilacion: 11/10/2026 23:11 GMT-4
-//  version de programa: 1.0.1
+//  Code version: 0.5
+//  Last build: 11/10/2026 23:11 GMT-4
+//  Program version: 1.0.1
 
 
 
@@ -39,7 +56,7 @@ constexpr COLORREF COLOR_BAR_BORDER = RGB(55, 55, 60);
 constexpr COLORREF COLOR_BAR_TXT    = RGB(240, 240, 240);
 constexpr COLORREF COLOR_BAR_ACCENT = RGB(130, 185, 250);
 
-// definir tipsde rafaga
+// Burst types for undo/redo management
 enum class BurstType {
     None,
     Typing,
@@ -47,7 +64,7 @@ enum class BurstType {
     Replace
 };
 
-// historial multinivel
+// Snapshot structure to hold text and selection state
 struct TextSnapshot {
     std::wstring text;
     DWORD selStart = 0;
@@ -99,7 +116,7 @@ public:
             GetWindowTextW(hEdit, &current[0], len + 1);
             current.resize(len);
 
-            // evita duplicar si no hay cambios
+            // If the last snapshot in the undo stack has the same text, update its selection range instead of adding a new snapshot
             if (!undoStack.empty() && undoStack.back().text == current) {
                 undoStack.back().selStart = selStart;
                 undoStack.back().selEnd = selEnd;
@@ -177,7 +194,7 @@ private:
     }
 };
 
-// Estados Globales 
+// -------------------------------Global application state------------------------------------------
 struct AppState {
     HWND        hwndMain   = nullptr;
     HWND        hwndEdit   = nullptr;
@@ -204,7 +221,9 @@ struct AppState {
 
 static AppState g_app;
 
-// Prototipos
+//-------------------------------------------------------------------------------------------------------
+
+// Function declarations
 LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK SubclassedEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 void UpdateCursorPosition();
@@ -216,7 +235,7 @@ void SetStatusTempMessage(const std::wstring& msg, UINT durationMs = 3000);
 void UpdateWindowTitle();
 void SetupEditorCaret();
 
-// Conversiones UTF-8 / UTF-16
+// UTF-8 / UTF-16 Conversion Functions
 std::wstring Utf8ToWide(const std::string& str) {
     if (str.empty()) return L"";
     int req = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), nullptr, 0);
@@ -240,14 +259,14 @@ std::string WideToUtf8(const std::wstring& wstr) {
     return out;
 }
 
-// Configuracion de Caret/cursor estilo terminal
+// Setup the caret for the editor control
 void SetupEditorCaret() {
     if (!g_app.hwndEdit) return;
     CreateCaret(g_app.hwndEdit, nullptr, g_app.charWidth, g_app.charHeight);
     ShowCaret(g_app.hwndEdit);
 }
 
-// Procedimiento-Subclase para el Control Edit
+// Subclassed window procedure for the edit control to handle custom behavior
 LRESULT CALLBACK SubclassedEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_SETFOCUS: {
@@ -374,7 +393,7 @@ LRESULT CALLBACK SubclassedEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM 
     return CallWindowProcW(g_app.origEditProc, hwnd, uMsg, wParam, lParam);
 }
 
-// Actualiza las cordenadas de linea y columna
+// Update the current cursor position (line and column) in the status bar
 void UpdateCursorPosition() {
     if (!g_app.hwndEdit) return;
     DWORD selStart = 0;
@@ -453,7 +472,7 @@ void SaveFileDialog(bool saveAs) {
     }
 }
 
-// carga fisica del contenido , win32 IO
+// Load file content with Win32 I/O
 bool LoadFileContent(const std::wstring& path) {
     HANDLE hFile = CreateFileW(
         path.c_str(),
@@ -472,7 +491,7 @@ bool LoadFileContent(const std::wstring& path) {
         return false;
     }
 
-    if (fileSize.QuadPart > 128 * 1024 * 1024) { // limite de seguridad de 128 MB ============ ! ! ! !
+    if (fileSize.QuadPart > 128 * 1024 * 1024) { // 128 MB limit
         CloseHandle(hFile);
         return false;
     }
@@ -505,7 +524,7 @@ bool LoadFileContent(const std::wstring& path) {
     return true;
 }
 
-// Guardar contenido con : win 32 IO
+// Save file content with Win32 I/O
 bool SaveFileContent(const std::wstring& path) {
     int length = GetWindowTextLengthW(g_app.hwndEdit);
     std::wstring wideContent(length + 1, L'\0');
@@ -537,7 +556,7 @@ bool SaveFileContent(const std::wstring& path) {
     return true;
 }
 
-// Actualiza el title window
+// Update the window title based on the current file and modification state
 void UpdateWindowTitle() {
     std::wstring title = L"Unkown Viewer";
     if (!g_app.currentFilePath.empty()) {
@@ -553,7 +572,7 @@ void UpdateWindowTitle() {
     SetWindowTextW(g_app.hwndMain, title.c_str());
 }
 
-// Mensjaes temporales del toolbar de estado
+// Set a temporary status message in the status bar for a specified duration
 void SetStatusTempMessage(const std::wstring& msg, UINT durationMs) {
     g_app.statusMessage = msg;
     if (g_app.statusTimerId) {
@@ -567,18 +586,18 @@ void SetStatusTempMessage(const std::wstring& msg, UINT durationMs) {
     InvalidateRect(g_app.hwndMain, &rcBar, FALSE);
 }
 
-// Procedimientos de la ventan principal
+// Main window procedure to handle messages for the main application window
 LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE: {
             g_app.hwndMain = hwnd;
 
-            // brochas y plumas
+            // Create brushes and pens for UI elements
             g_app.hBrushWhite = CreateSolidBrush(COLOR_CANVAS_BG);
             g_app.hBrushBar   = CreateSolidBrush(COLOR_BAR_BG);
             g_app.hPenBorder  = CreatePen(PS_SOLID, 1, COLOR_BAR_BORDER);
 
-            // editor de fuente
+            // Create fonts for the editor and status bar
             HDC hdc = GetDC(hwnd);
             int fontHeight = -MulDiv(12, GetDeviceCaps(hdc, LOGPIXELSY), 72);
             g_app.hFontEditor = CreateFontW(
@@ -587,7 +606,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas"
             );
 
-            // medir dimensiones del caracter para el caret
+            // Obtain text metrics to determine the caret size.
             HFONT hOldFont = (HFONT)SelectObject(hdc, g_app.hFontEditor);
             TEXTMETRICW tm;
             GetTextMetricsW(hdc, &tm);
@@ -595,7 +614,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             g_app.charHeight = tm.tmHeight;
             SelectObject(hdc, hOldFont);
 
-            // fuente para barra de estado
+            // Create font for status bar
             int statusHeight = -MulDiv(9, GetDeviceCaps(hdc, LOGPIXELSY), 72);
             g_app.hFontStatus = CreateFontW(
                 statusHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
@@ -604,7 +623,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             );
             ReleaseDC(hwnd, hdc);
 
-            // control de edicion multilinea
+            // Create the edit control for text editing
             RECT rc;
             GetClientRect(hwnd, &rc);
             int editH = (rc.bottom > STATUS_BAR_HEIGHT) ? (rc.bottom - STATUS_BAR_HEIGHT) : 0;
@@ -625,7 +644,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             SendMessageW(g_app.hwndEdit, WM_SETFONT, (WPARAM)g_app.hFontEditor, TRUE);
             SendMessageW(g_app.hwndEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(10, 10));
 
-            // subclasear para caret y atajos
+            // Subclass the edit control to handle custom behavior
             g_app.origEditProc = (WNDPROC)SetWindowLongPtrW(g_app.hwndEdit, GWLP_WNDPROC, (LONG_PTR)SubclassedEditProc);
 
             g_app.diskContent = L"";
@@ -682,30 +701,29 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             RECT rcClient;
             GetClientRect(hwnd, &rcClient);
 
-            // resrevar espacio para barra de estado
+            // Draw the status bar
             RECT rcBar = { 0, rcClient.bottom - STATUS_BAR_HEIGHT, rcClient.right, rcClient.bottom };
 
-            // barra de estado - background - color
+            // Fill the status bar background
             FillRect(hdc, &rcBar, g_app.hBrushBar);
 
-            // hr
             HPEN hOldPen = (HPEN)SelectObject(hdc, g_app.hPenBorder);
             MoveToEx(hdc, rcBar.left, rcBar.top, nullptr);
             LineTo(hdc, rcBar.right, rcBar.top);
             SelectObject(hdc, hOldPen);
 
-            // renderizar texto para H y M
+            // Draw the status bar text
             HFONT hOldFont = (HFONT)SelectObject(hdc, g_app.hFontStatus);
             SetBkMode(hdc, TRANSPARENT);
 
-            // comandos
+            // Draw the left side commands
             const wchar_t* cmds = L"CTRL+O (OPEN)   CTRL+S (SAVE)   CTRL+X (CLOSE)   CTRL+Z (UNDO)   CTRL+Y (REDO)   CTRL+A (ALL)";
             RECT rcLeft = rcBar;
             rcLeft.left += 12;
             SetTextColor(hdc, COLOR_BAR_TXT);
             DrawTextW(hdc, cmds, -1, &rcLeft, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-            // alerts
+            // Draw the right side status information
             wchar_t szRight[128];
             if (!g_app.statusMessage.empty()) {
                 swprintf_s(szRight, L"%s   |   Ln %d, Col %d   |   UTF-8", g_app.statusMessage.c_str(), g_app.currentLine, g_app.currentCol);
@@ -795,7 +813,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
 
-// punto de entrada para winapi-window
+// Entry point for the application
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     INITCOMMONCONTROLSEX icex = { sizeof(INITCOMMONCONTROLSEX), ICC_STANDARD_CLASSES };
     InitCommonControlsEx(&icex);
@@ -818,7 +836,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         return 1;
     }
 
-    // creacion y parametros de ventana
+    // Create the main application window
     HWND hwnd = CreateWindowExW(
         WS_EX_ACCEPTFILES,
         CLASS_NAME,
@@ -873,5 +891,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     return wWinMain(hInstance, nullptr, GetCommandLineW(), nCmdShow);
 }
 
-// el uso comercial de este codigo o su modificacion para uso cerrado (closed source) esta prohibido , 
-// protegido bajo la licencia GPLV3
+// Commercial use of this code or its modification for closed-source use is prohibited;
+// protected under the GPLv3 license.
