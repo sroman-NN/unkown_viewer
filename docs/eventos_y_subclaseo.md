@@ -46,8 +46,8 @@ si la bandera esta activa, se examina el parametro wparam:
 - tecla 'S' o 's': invoca savefiledialog(false) para guardar los cambios en el archivo activo o solicitar una ruta si el documento es nuevo. retorna cero.
 - tecla 'X' o 'x': envia el mensaje wm_close a la ventana principal mediante postmessagew(g_app.hwndmain, wm_close, 0, 0), iniciando el protocolo de confirmacion de salida. retorna cero.
 - tecla 'A' o 'a': selecciona todo el contenido del buffer enviando em_setsel con inicio 0 y final -1 al control. actualiza las coordenadas de la barra y retorna cero.
-- tecla 'Z' o 'z': envia el mensaje em_undo al control nativo, revirtiendo la ultima modificacion en el buffer interno de deshacer. actualiza las coordenadas y retorna cero.
-- tecla 'Y' o 'y': reenvia em_undo para operar como alternador (toggle) de rehacer en el control estandar. retorna cero.
+- tecla 'Z' o 'z': evalua el estado de shift. si shift esta pulsado (ctrl+shift+z), invoca redo mediante g_app.undomgr.performredo(). si shift no esta pulsado (ctrl+z), invoca undo multinivel mediante g_app.undomgr.performundo(). actualiza las coordenadas, el estado de modificacion frente al contenido en disco y la barra de estado. retorna cero.
+- tecla 'Y' o 'y': invoca redo multinivel mediante g_app.undomgr.performredo(). actualiza coordenadas, bandera de modificacion y estado visual. retorna cero.
 
 si la tecla pulsada no corresponde a ningun atajo con control, se rompe el bloque condicional y el mensaje fluye normalmente a callwindowprocw.
 

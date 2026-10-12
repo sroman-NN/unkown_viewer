@@ -39,6 +39,144 @@ constexpr COLORREF COLOR_BAR_BORDER = RGB(55, 55, 60);
 constexpr COLORREF COLOR_BAR_TXT    = RGB(240, 240, 240);
 constexpr COLORREF COLOR_BAR_ACCENT = RGB(130, 185, 250);
 
+// definir tipsde rafaga
+enum class BurstType {
+    None,
+    Typing,
+    Deleting,
+    Replace
+};
+
+// historial multinivel
+struct TextSnapshot {
+    std::wstring text;
+    DWORD selStart = 0;
+    DWORD selEnd = 0;
+};
+
+class UndoManager {
+public:
+    std::vector<TextSnapshot> undoStack;
+    std::vector<TextSnapshot> redoStack;
+    DWORD lastBurstTime = 0;
+    bool burstActive = false;
+    BurstType burstType = BurstType::None;
+    bool inUndoRedo = false;
+    static constexpr size_t MAX_HISTORY = 100;
+    static constexpr DWORD BURST_TIMEOUT_MS = 600;
+
+    void Reset() {
+        undoStack.clear();
+        redoStack.clear();
+        burstActive = false;
+        burstType = BurstType::None;
+        lastBurstTime = 0;
+        inUndoRedo = false;
+    }
+
+    void OnBeforeUserMutation(HWND hEdit, BurstType type, bool forceNewBurst = false) {
+        if (inUndoRedo) return;
+
+        DWORD selStart = 0, selEnd = 0;
+        SendMessageW(hEdit, EM_GETSEL, (WPARAM)&selStart, (LPARAM)&selEnd);
+
+        int len = GetWindowTextLengthW(hEdit);
+
+        if (type == BurstType::Deleting && len == 0) {
+            return;
+        }
+
+       
+        if (selStart != selEnd) {
+            forceNewBurst = true;
+        }
+
+        DWORD now = GetTickCount();
+        bool startNew = !burstActive || forceNewBurst || (burstType != type) || (now - lastBurstTime > BURST_TIMEOUT_MS);
+
+        if (startNew) {
+            std::wstring current(len + 1, L'\0');
+            GetWindowTextW(hEdit, &current[0], len + 1);
+            current.resize(len);
+
+            // evita duplicar si no hay cambios
+            if (!undoStack.empty() && undoStack.back().text == current) {
+                undoStack.back().selStart = selStart;
+                undoStack.back().selEnd = selEnd;
+            } else {
+                if (undoStack.size() >= MAX_HISTORY) {
+                    undoStack.erase(undoStack.begin());
+                }
+                undoStack.push_back({ current, selStart, selEnd });
+            }
+
+            redoStack.clear();
+            burstActive = true;
+            burstType = type;
+        }
+
+        lastBurstTime = now;
+    }
+
+    bool PerformUndo(HWND hEdit) {
+        if (undoStack.empty()) return false;
+
+        burstActive = false;
+        burstType = BurstType::None;
+
+        int len = GetWindowTextLengthW(hEdit);
+        std::wstring current(len + 1, L'\0');
+        GetWindowTextW(hEdit, &current[0], len + 1);
+        current.resize(len);
+
+        DWORD selStart = 0, selEnd = 0;
+        SendMessageW(hEdit, EM_GETSEL, (WPARAM)&selStart, (LPARAM)&selEnd);
+
+        redoStack.push_back({ current, selStart, selEnd });
+
+        TextSnapshot target = undoStack.back();
+        undoStack.pop_back();
+
+        ApplySnapshot(hEdit, target);
+        return true;
+    }
+
+    bool PerformRedo(HWND hEdit) {
+        if (redoStack.empty()) return false;
+
+        burstActive = false;
+        burstType = BurstType::None;
+
+        int len = GetWindowTextLengthW(hEdit);
+        std::wstring current(len + 1, L'\0');
+        GetWindowTextW(hEdit, &current[0], len + 1);
+        current.resize(len);
+
+        DWORD selStart = 0, selEnd = 0;
+        SendMessageW(hEdit, EM_GETSEL, (WPARAM)&selStart, (LPARAM)&selEnd);
+
+        undoStack.push_back({ current, selStart, selEnd });
+
+        TextSnapshot target = redoStack.back();
+        redoStack.pop_back();
+
+        ApplySnapshot(hEdit, target);
+        return true;
+    }
+
+private:
+    void ApplySnapshot(HWND hEdit, const TextSnapshot& snap) {
+        inUndoRedo = true;
+        SendMessageW(hEdit, WM_SETREDRAW, FALSE, 0);
+        SetWindowTextW(hEdit, snap.text.c_str());
+        SendMessageW(hEdit, EM_SETSEL, (WPARAM)snap.selStart, (LPARAM)snap.selEnd);
+        SendMessageW(hEdit, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(hEdit, nullptr, TRUE);
+        inUndoRedo = false;
+        lastBurstTime = GetTickCount();
+    }
+};
+
 // Estados Globales 
 struct AppState {
     HWND        hwndMain   = nullptr;
@@ -51,6 +189,7 @@ struct AppState {
     HPEN        hPenBorder  = nullptr;
     
     std::wstring currentFilePath;
+    std::wstring diskContent;
     std::wstring statusMessage;
     DWORD       statusTimerId = 0;
     
@@ -59,6 +198,8 @@ struct AppState {
     int currentLine = 1;
     int currentCol  = 1;
     bool isModified = false;
+
+    UndoManager undoMgr;
 };
 
 static AppState g_app;
@@ -119,6 +260,28 @@ LRESULT CALLBACK SubclassedEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM 
             DestroyCaret();
             return CallWindowProcW(g_app.origEditProc, hwnd, uMsg, wParam, lParam);
         }
+        case WM_LBUTTONDOWN: {
+            g_app.undoMgr.burstActive = false;
+            LRESULT res = CallWindowProcW(g_app.origEditProc, hwnd, uMsg, wParam, lParam);
+            UpdateCursorPosition();
+            return res;
+        }
+        case WM_CHAR: {
+            bool isCtrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            if (!isCtrl) {
+                if ((wchar_t)wParam >= 32 || wParam == VK_RETURN || wParam == VK_TAB) {
+                    bool forceNew = (wParam == VK_RETURN || wParam == 32);
+                    g_app.undoMgr.OnBeforeUserMutation(hwnd, BurstType::Typing, forceNew);
+                }
+            }
+            break;
+        }
+        case WM_PASTE:
+        case WM_CUT:
+        case WM_CLEAR: {
+            g_app.undoMgr.OnBeforeUserMutation(hwnd, BurstType::Replace, true);
+            break;
+        }
         case WM_KEYDOWN: {
             bool isCtrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             if (isCtrl) {
@@ -141,18 +304,59 @@ LRESULT CALLBACK SubclassedEditProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM 
                         UpdateCursorPosition();
                         return 0;
                     case 'Z':
-                    case 'z':
-                        SendMessageW(hwnd, EM_UNDO, 0, 0);
+                    case 'z': {
+                        bool isShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                        if (isShift) {
+                            if (g_app.undoMgr.PerformRedo(hwnd)) {
+                                SetStatusTempMessage(L"redo");
+                            } else {
+                                SetStatusTempMessage(L"nothing to redo");
+                            }
+                        } else {
+                            if (g_app.undoMgr.PerformUndo(hwnd)) {
+                                SetStatusTempMessage(L"undo");
+                            } else {
+                                SetStatusTempMessage(L"nothing to undo");
+                            }
+                        }
+                        int len = GetWindowTextLengthW(hwnd);
+                        std::wstring cur(len + 1, L'\0');
+                        GetWindowTextW(hwnd, &cur[0], len + 1);
+                        cur.resize(len);
+                        g_app.isModified = (cur != g_app.diskContent);
+                        UpdateWindowTitle();
                         UpdateCursorPosition();
                         return 0;
+                    }
                     case 'Y':
-                    case 'y':
-                        // Redo / toggle undo
-                        SendMessageW(hwnd, EM_UNDO, 0, 0);
+                    case 'y': {
+                        if (g_app.undoMgr.PerformRedo(hwnd)) {
+                            SetStatusTempMessage(L"redo");
+                        } else {
+                            SetStatusTempMessage(L"nothing to redo");
+                        }
+                        int len = GetWindowTextLengthW(hwnd);
+                        std::wstring cur(len + 1, L'\0');
+                        GetWindowTextW(hwnd, &cur[0], len + 1);
+                        cur.resize(len);
+                        g_app.isModified = (cur != g_app.diskContent);
+                        UpdateWindowTitle();
                         UpdateCursorPosition();
                         return 0;
+                    }
+                    case VK_BACK:
+                    case VK_DELETE:
+                        g_app.undoMgr.OnBeforeUserMutation(hwnd, BurstType::Deleting, true);
+                        break;
                     default:
                         break;
+                }
+            } else {
+                if (wParam == VK_BACK || wParam == VK_DELETE) {
+                    g_app.undoMgr.OnBeforeUserMutation(hwnd, BurstType::Deleting, false);
+                } else if (wParam == VK_LEFT || wParam == VK_RIGHT || wParam == VK_UP || wParam == VK_DOWN ||
+                           wParam == VK_HOME || wParam == VK_END || wParam == VK_PRIOR || wParam == VK_NEXT) {
+                    g_app.undoMgr.burstActive = false;
                 }
             }
             break;
@@ -194,7 +398,7 @@ void OpenFileDialog() {
     wchar_t szFile[MAX_PATH] = L"";
     OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
     ofn.hwndOwner = g_app.hwndMain;
-    ofn.lpstrFilter = L"All Files (*.*)\0";
+    ofn.lpstrFilter = L"All Files (*.*)\0*.*\0\0";
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
@@ -204,10 +408,10 @@ void OpenFileDialog() {
             g_app.currentFilePath = szFile;
             g_app.isModified = false;
             UpdateWindowTitle();
-            SetStatusTempMessage(L"document_opened");
+            SetStatusTempMessage(L"File opened");
             UpdateCursorPosition();
         } else {
-            SetStatusTempMessage(L"error_opening_file!");
+            SetStatusTempMessage(L"Error opening file");
         }
     }
 }
@@ -218,9 +422,9 @@ void SaveFileDialog(bool saveAs) {
         if (SaveFileContent(g_app.currentFilePath)) {
             g_app.isModified = false;
             UpdateWindowTitle();
-            SetStatusTempMessage(L"file_saved");
+            SetStatusTempMessage(L"File saved");
         } else {
-            SetStatusTempMessage(L"error_saving_file");
+            SetStatusTempMessage(L"Error saving file");
         }
         return;
     }
@@ -232,7 +436,7 @@ void SaveFileDialog(bool saveAs) {
 
     OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
     ofn.hwndOwner = g_app.hwndMain;
-    ofn.lpstrFilter = L"All Files (*.*)\0*";
+    ofn.lpstrFilter = L"All Files (*.*)\0*.*\0\0";
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
@@ -242,9 +446,9 @@ void SaveFileDialog(bool saveAs) {
             g_app.currentFilePath = szFile;
             g_app.isModified = false;
             UpdateWindowTitle();
-            SetStatusTempMessage(L"file_saved");
+            SetStatusTempMessage(L"File saved");
         } else {
-            SetStatusTempMessage(L"error_saving_file");
+            SetStatusTempMessage(L"Error saving file");
         }
     }
 }
@@ -294,6 +498,8 @@ bool LoadFileContent(const std::wstring& path) {
     }
 
     std::wstring wideContent = Utf8ToWide(buffer);
+    g_app.diskContent = wideContent;
+    g_app.undoMgr.Reset();
     SetWindowTextW(g_app.hwndEdit, wideContent.c_str());
     SendMessageW(g_app.hwndEdit, EM_EMPTYUNDOBUFFER, 0, 0);
     return true;
@@ -327,6 +533,7 @@ bool SaveFileContent(const std::wstring& path) {
         }
     }
     CloseHandle(hFile);
+    g_app.diskContent = wideContent;
     return true;
 }
 
@@ -421,6 +628,8 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             // subclasear para caret y atajos
             g_app.origEditProc = (WNDPROC)SetWindowLongPtrW(g_app.hwndEdit, GWLP_WNDPROC, (LONG_PTR)SubclassedEditProc);
 
+            g_app.diskContent = L"";
+            g_app.undoMgr.Reset();
             UpdateWindowTitle();
             SetFocus(g_app.hwndEdit);
             return 0;
@@ -442,9 +651,16 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
         case WM_COMMAND: {
             if (LOWORD(wParam) == 1001 && HIWORD(wParam) == EN_CHANGE) {
-                if (!g_app.isModified) {
-                    g_app.isModified = true;
-                    UpdateWindowTitle();
+                if (!g_app.undoMgr.inUndoRedo) {
+                    int len = GetWindowTextLengthW(g_app.hwndEdit);
+                    std::wstring cur(len + 1, L'\0');
+                    GetWindowTextW(g_app.hwndEdit, &cur[0], len + 1);
+                    cur.resize(len);
+                    bool mod = (cur != g_app.diskContent);
+                    if (mod != g_app.isModified) {
+                        g_app.isModified = mod;
+                        UpdateWindowTitle();
+                    }
                 }
                 UpdateCursorPosition();
             }
@@ -483,7 +699,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             SetBkMode(hdc, TRANSPARENT);
 
             // comandos
-            const wchar_t* cmds = L"CTRL+O ()   CTRL+S (SAVE)   CTRL+X (CLOSE)   CTRL+Z (UNDO)   CTRL+A (ALL)";
+            const wchar_t* cmds = L"CTRL+O (OPEN)   CTRL+S (SAVE)   CTRL+X (CLOSE)   CTRL+Z (UNDO)   CTRL+Y (REDO)   CTRL+A (ALL)";
             RECT rcLeft = rcBar;
             rcLeft.left += 12;
             SetTextColor(hdc, COLOR_BAR_TXT);
